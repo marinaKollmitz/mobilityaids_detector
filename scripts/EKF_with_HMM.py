@@ -3,31 +3,17 @@ from HMM import HMM
 
 class EKF_with_HMM:
 
-    def __init__(self, measurement, trafo_odom_in_cam, cam_calib, dt, hmm_observation_model, track_id):
+    def __init__(self, measurement, trafo_odom_in_cam, cam_calib, hmm_observation_model, track_id):
 
         self.track_id = track_id
         
-        accel_noise = 0.5 #noise in acceleration: meters/sec^2
+        self.accel_noise = 1.25 #noise in acceleration: meters/sec^2
         
         trafo_cam_in_odom = np.linalg.inv(trafo_odom_in_cam)
         odom_det = self.get_odom_detection(measurement, trafo_cam_in_odom, cam_calib)
         
         #state: x_odom, y_odom, z_odom, vel_x_odom, vel_y_odom
         self.mu = np.array([odom_det["x"], odom_det["y"], odom_det["z"], [0.0], [0.0]])
-        
-        #motion noise
-        self.Q = np.array( [[(dt**2),     0.0,     0.0, (dt),  0.0],
-                             [   0.0, (dt**2),     0.0,  0.0, (dt)],
-                             [   0.0,     0.0, (dt**2),  0.0,  0.0],
-                             [  (dt),     0.0,     0.0,  1.0,  0.0],
-                             [   0.0,    (dt),     0.0,  0.0,  1.0]])*(accel_noise**2);
-        
-        #motion model
-        self.A = np.matrix( [ [1, 0, 0, dt, 0], 
-                              [0, 1, 0, 0, dt], 
-                              [0, 0, 1, 0,  0],
-                              [0, 0, 0, 1,  0], 
-                              [0, 0, 0, 0,  1] ])
         
         #measurement_noise
         self.R = np.array([[104.6025,  0.9303, 0.0139],
@@ -38,8 +24,8 @@ class EKF_with_HMM:
         self.sigma = np.array([[0.0, 0.0, 0.0, 0.0, 0.0],
                                [0.0, 0.0, 0.0, 0.0, 0.0],
                                [0.0, 0.0, 0.0, 0.0, 0.0],
-                               [0.0, 0.0, 0.0, 0.1, 0.0],
-                               [0.0, 0.0, 0.0, 0.0, 0.1]])
+                               [0.0, 0.0, 0.0, 1.0, 0.0],
+                               [0.0, 0.0, 0.0, 0.0, 1.0]])
         
         #initialize state uncertainty of pose from measurement uncertainty
         H = self.get_H(trafo_odom_in_cam, cam_calib)
@@ -151,11 +137,25 @@ class EKF_with_HMM:
         
         return np.array([[im_x], [im_y], [depth]])
     
-    def predict(self):
+    def predict(self, dt):
+
+        #motion model
+        A = np.matrix( [ [1, 0, 0, dt, 0], 
+                         [0, 1, 0, 0, dt], 
+                         [0, 0, 1, 0,  0],
+                         [0, 0, 0, 1,  0], 
+                         [0, 0, 0, 0,  1] ])
+
+        #motion noise
+        Q = np.array( [[(dt**2),     0.0,     0.0, (dt),  0.0],
+                       [    0.0, (dt**2),     0.0,  0.0, (dt)],
+                       [    0.0,     0.0, (dt**2),  0.0,  0.0],
+                       [   (dt),     0.0,     0.0,  1.0,  0.0],
+                       [    0.0,    (dt),     0.0,  0.0,  1.0]])*(self.accel_noise**2);
         
         #this is linear in our case, can update like KF
-        self.mu = self.A.dot(self.mu)
-        self.sigma = self.A.dot(self.sigma).dot(np.transpose(self.A)) + self.Q
+        self.mu = A.dot(self.mu)
+        self.sigma = A.dot(self.sigma).dot(np.transpose(A)) + Q
         
         self.hmm.predict()
         self.updated = False

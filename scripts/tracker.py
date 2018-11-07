@@ -4,22 +4,21 @@ from EKF_with_HMM import EKF_with_HMM
 from scipy.stats import multivariate_normal
 
 class Tracker:
-    def __init__(self, time_delta, hmm_observation_model):
+    def __init__(self, hmm_observation_model):
         self.tracks = []
         self.pos_cov_limit = 1.0
         self.chi2_thresh = 7.815 #threshold for Mahalanobis distance
         self.eucl_thresh = 1.25 #threshold for Eucledian distance
-        self.time_delta = time_delta#time between KF updates
         self.HMM_observation_model = hmm_observation_model
         self.curr_id = 0
     
-    def predict(self):
+    def predict(self, dt):
         for track in self.tracks:
             if track.sigma[0,0] > self.pos_cov_limit or track.sigma[1,1] > self.pos_cov_limit or track.hmm.get_max_class() is 0:
                 print "deleting track", track.track_id
                 self.tracks.remove(track)
             else:
-                track.predict()
+                track.predict(dt)
     
     def update(self, detections, trafo_odom_in_cam, cam_calib):
         #calculate pairwise mahalanobis distance
@@ -52,8 +51,14 @@ class Tracker:
 #                mu = np.array([[track.mu[0,0]], [track.mu[1,0]], [track.mu[2,0]]])
 #                prob_dens = get_prob_density(mu, np.array([odom_det["x"], odom_det["y"], odom_det["z"]]), track.sigma[0:3,0:3])
                 
-                if mahalanobis_d >  self.chi2_thresh or eucl_distance > self.eucl_thresh:
+                if mahalanobis_d >  self.chi2_thresh:
+                    print "mahalanobis too big: ", mahalanobis_d
                     assignment_profit[j,i] = -1
+
+                if eucl_distance > self.eucl_thresh:
+                    print "eucl too big: ", eucl_distance
+                    assignment_profit[j,i] = -1
+
                     
         detection_assignments = -1 * np.ones(len(detections), np.int)
 
@@ -76,7 +81,7 @@ class Tracker:
             else: 
                 #start new tracker
                 print("detection not matched, start new KF")
-                track = EKF_with_HMM(detection, trafo_odom_in_cam, cam_calib, self.time_delta, self.HMM_observation_model, self.curr_id)
+                track = EKF_with_HMM(detection, trafo_odom_in_cam, cam_calib, self.HMM_observation_model, self.curr_id)
                 self.curr_id += 1
                 self.tracks.append(track)
         
