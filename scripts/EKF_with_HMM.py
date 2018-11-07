@@ -7,7 +7,8 @@ class EKF_with_HMM:
 
         self.track_id = track_id
         
-        self.accel_noise = 1.25 #noise in acceleration: meters/sec^2
+        self.accel_noise = 15.0 #noise in acceleration, in meters/sec^2
+        self.height_noise = 0.25 #noise in height of person, in m
         
         trafo_cam_in_odom = np.linalg.inv(trafo_odom_in_cam)
         odom_det = self.get_odom_detection(measurement, trafo_cam_in_odom, cam_calib)
@@ -17,15 +18,15 @@ class EKF_with_HMM:
         
         #measurement_noise
         self.R = np.array([[104.6025,  0.9303, 0.0139],
-                            [  0.9303, 41.2974, 0.0323],
-                            [  0.0139,  0.0323, 0.1177]])
+                           [  0.9303, 41.2974, 0.0323],
+                           [  0.0139,  0.0323, 0.1177]])
         
         #state uncertainty
-        self.sigma = np.array([[0.0, 0.0, 0.0, 0.0, 0.0],
-                               [0.0, 0.0, 0.0, 0.0, 0.0],
-                               [0.0, 0.0, 0.0, 0.0, 0.0],
-                               [0.0, 0.0, 0.0, 1.0, 0.0],
-                               [0.0, 0.0, 0.0, 0.0, 1.0]])
+        self.sigma = np.array([[0.0, 0.0, 0.0,    0.0,    0.0],
+                               [0.0, 0.0, 0.0,    0.0,    0.0],
+                               [0.0, 0.0, 0.0,    0.0,    0.0],
+                               [0.0, 0.0, 0.0, 1.5**2,    0.0],
+                               [0.0, 0.0, 0.0,    0.0, 1.5**2]])
         
         #initialize state uncertainty of pose from measurement uncertainty
         H = self.get_H(trafo_odom_in_cam, cam_calib)
@@ -152,6 +153,22 @@ class EKF_with_HMM:
                        [    0.0,     0.0, (dt**2),  0.0,  0.0],
                        [   (dt),     0.0,     0.0,  1.0,  0.0],
                        [    0.0,    (dt),     0.0,  0.0,  1.0]])*(self.accel_noise**2);
+        
+        #noise gain matrix
+        gamma = np.array([[dt**2/2,       0, 0],
+                          [      0, dt**2/2, 0],
+                          [      0,       0, 1],
+                          [     dt,       0, 0],
+                          [      0,      dt, 0]])
+        
+        #individual noise params
+        w = np.array([[self.accel_noise,                0,                 0],
+                      [               0, self.accel_noise,                 0],
+                      [               0,                0, self.height_noise]])
+        
+        Q = gamma.dot(w).dot(w.transpose()).dot(gamma.transpose())
+        
+        #print "Q", Q
         
         #this is linear in our case, can update like KF
         self.mu = A.dot(self.mu)
