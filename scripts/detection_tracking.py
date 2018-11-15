@@ -21,8 +21,6 @@ import tf
 from std_msgs.msg import Header
 from tracker import Tracker
 
-import matplotlib.pyplot as plt
-
 class Detector:
     def __init__(self):
         
@@ -39,7 +37,7 @@ class Detector:
         self.model = infer_engine.initialize_model_from_cfg()
         self.bridge = CvBridge()
     
-        rospy.Subscriber("/kinect2/qhd/image_color", Image, self.image_callback, queue_size=1) 
+        rospy.Subscriber("/kinect2/qhd/image_color_rect", Image, self.image_callback, queue_size=1) 
         rospy.Subscriber("/kinect2/qhd/camera_info", CameraInfo, self.cam_info_callback, queue_size=1)
         
         self.image_viz_pub = rospy.Publisher("mobility_aids/image", Image, queue_size=1)
@@ -54,7 +52,6 @@ class Detector:
         self.classnames = ["background", "pedestrian", "crutches", "walking_frame", "wheelchair", "push_wheelchair"]
         
         #initialize position, velocity and class tracker
-        time_delta = 0.5
         hmm_observation_model = np.loadtxt(val_dir + "observation_model.txt", delimiter=',')
         self.tracker = Tracker(hmm_observation_model)
         
@@ -99,19 +96,22 @@ class Detector:
             #this is the transformation we get from the files in tracking
             trafo_cam_in_odom = np.dot(trans, rot)
         
-        except (tf.LookupException, tf.ConnectivityException, tf.ExtrapolationException) as e:
+        except (Exception) as e:
             print e
         
         return trafo_cam_in_odom
     
-    def get_detection(self, pos, confidence, category):
+    def get_detection(self, pos, vel, confidence, category, track_id):
                 
         det = Detection()
         det.category = self.classnames[category]
-        det.track_id = 0
+        det.track_id = track_id
         det.position.x = pos.x
         det.position.y = pos.y
         det.position.z = pos.z
+        det.velocity.x = vel.x
+        det.velocity.y = vel.y
+        det.velocity.z = 0.0
         det.confidence = confidence
         
         return det
@@ -275,8 +275,13 @@ class Detector:
             pos.x = tracker_mu[0,0] 
             pos.y = tracker_mu[1,0] 
             pos.z = tracker_mu[2,0]
+
+            vel = Point()
+            vel.x = tracker_mu[3,0]
+            vel.y = tracker_mu[4,0]
+            vel.z = 0.0
             
-            tracker_det = self.get_detection(pos, track.hmm.get_max_score(), track.hmm.get_max_class())
+            tracker_det = self.get_detection(pos, vel, track.hmm.get_max_score(), track.hmm.get_max_class(), track.track_id)
             tracker_detections.detections.append(tracker_det)
             
             cov = tracker_sigma[0:2,0:2]
