@@ -20,6 +20,7 @@ from geometry_msgs.msg import Point, PointStamped
 import tf
 from std_msgs.msg import Header
 from tracker import Tracker
+import cv2
 
 class Detector:
     def __init__(self):
@@ -29,6 +30,7 @@ class Detector:
         
         weights_file = train_dir + "model_final.pkl"
         config_file = "/home/vasquez/tools/detectron_depth/configs/hospital_detection/faster_rcnn_googlenet_xxs_RGB.yaml"
+
         merge_cfg_from_file(config_file)
         cfg.TEST.WEIGHTS = weights_file
         cfg.NUM_GPUS = 1
@@ -44,6 +46,7 @@ class Detector:
         self.rviz_viz_pub = rospy.Publisher("mobility_aids/vis", MarkerArray, queue_size=1)
         self.det_pub = rospy.Publisher("mobility_aids/detections", Detections, queue_size=1)
         self.cam_info_pub = rospy.Publisher("mobility_aids/camera_info", CameraInfo, queue_size=1)
+        
         
         self.last_image = None
         self.new_image = False
@@ -123,6 +126,7 @@ class Detector:
         im_x = (bbox[0]+bbox[2])/2
         im_y = (bbox[1]+bbox[3])/2
         
+        measurement["bbox"] = bbox
         measurement["im_x"] = im_x
         measurement["im_y"] = im_y
         measurement["depth"] = depth
@@ -220,6 +224,37 @@ class Detector:
         
         return cam_calib
     
+    def get_inside_ratio(self, bbox_out, bbox_in):
+        overlap_bbox=[0,0,0,0]
+        overlap_bbox[0] = max(bbox_out[0], bbox_in[0]);
+        overlap_bbox[1] = max(bbox_out[1], bbox_in[1]);
+        overlap_bbox[2] = min(bbox_out[2], bbox_in[2]);
+        overlap_bbox[3] = min(bbox_out[3], bbox_in[3]);	
+        #print bi
+        overlap_width = overlap_bbox[2] - overlap_bbox[0] + 1;
+        overlap_height = overlap_bbox[3] - overlap_bbox[1] + 1;
+        inside_ratio = 0.0;
+        if (overlap_width>0 and overlap_height>0):
+            overlap_area = overlap_width*overlap_height
+            bbox_in_area = (bbox_in[2] - bbox_in[0] + 1) * (bbox_in[3] - bbox_in[1] + 1)
+            inside_ratio = float(overlap_area)/float(bbox_in_area);
+        return inside_ratio
+    
+    def filter_inside_boxes(self, detections, inside_ratio_thres = 0.8):
+        
+        for outside_det in detections:
+            
+            # check for mobility aids bboxes
+            if outside_det['class'] > 1:
+                for inside_det in detections:
+                    #check all pedestrian detections against mobility aids detection
+                    if inside_det['class'] is 1:
+                        inside_ratio = self.get_inside_ratio(outside_det['bbox'], inside_det['bbox'])
+                        if inside_ratio > inside_ratio_thres:
+                            print "filtering pedestrian bbox ", inside_det
+                            print "inside_ratio", inside_ratio
+                            detections.remove(inside_det)
+    
     def process_detections(self, image, cls_boxes, cls_depths, thresh = 0.9):
         
         measurements = []
@@ -230,12 +265,13 @@ class Detector:
         boxes, depths, classes = self.convert_from_cls_format(cls_boxes, cls_depths)
         trafo_cam_in_odom = self.get_trafo_cam_in_odom(self.last_image.header.stamp)
         
-        colors_box = [[1, 1, 1],
-                      [39,167,0],
-                      [0,0,191],
-                      [0,255,255],
-                      [255,0,228],
-                      [101,0,255]]
+        #bgr
+        colors_box = [[1, 1, 1], #black
+                      [39,167,0], #green
+                      [0,0,191], #red
+                      [0,255,255], #yellow
+                      [255,0,228], #pink
+                      [0,101,255]] #orange
         
         for i in range(len(classes)):
             bbox = boxes[i, :4]
@@ -246,11 +282,16 @@ class Detector:
             if score > thresh[cla]:
                 # draw bbox
                 color_box = colors_box[cla]
-                cv2.rectangle(image, (bbox[0], bbox[1]), (bbox[2], bbox[3]), color_box, 3)
+                cv2.rectangle(image, (bbox[0], bbox[1]), (bbox[2], bbox[3]), [100,100,100], 3)
                 
                 # fill detections message
                 meas = self.get_measurement(bbox, score, depth, cla)
                 measurements.append(meas)
+                
+        self.filter_inside_boxes(measurements)
+        for meas in measurements:
+            bbox = meas["bbox"]
+            cv2.rectangle(image, (bbox[0], bbox[1]), (bbox[2], bbox[3]), colors_box[meas['class']], 3)
                 
         #update the tracker
         self.tracker.predict(self.dt)
@@ -303,6 +344,7 @@ class Detector:
         
         if self.new_image:
             image = self.bridge.imgmsg_to_cv2(self.last_image, "passthrough")
+            #image = cv2.imread("/home/kollmitz/datasets/mobility-aids/Images/seq_1468843742.5302676900.png")
             with c2_utils.NamedCudaScope(0):
                 cls_boxes, cls_depths, cls_segms, cls_keyps = infer_engine.im_detect_all(
                     self.model, image, None)
