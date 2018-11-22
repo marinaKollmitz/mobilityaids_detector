@@ -6,8 +6,8 @@ from scipy.stats import multivariate_normal
 class Tracker:
     def __init__(self, hmm_observation_model):
         self.tracks = []
-        self.pos_cov_limit = 1.0
-        self.chi2_thresh = 7.815 #threshold for Mahalanobis distance
+        self.pos_cov_limit = 1.5
+        self.chi2_thresh = 17.815 #threshold for Mahalanobis distance
         self.eucl_thresh = 1.25 #threshold for Eucledian distance
         self.HMM_observation_model = hmm_observation_model
         self.curr_id = 0
@@ -36,11 +36,15 @@ class Tracker:
                 S = H.dot(track.sigma).dot(np.transpose(H)) + track.R
                 mahalanobis_d = np.transpose(v).dot(np.linalg.inv(S)).dot(v)
                 
-                x = np.squeeze(v)
-                mu = np.array([0.0, 0.0, 0.0])
-                pdf = multivariate_normal.pdf(x, mu, S)
+                try:
+                    x = np.squeeze(v)
+                    mu = np.array([0.0, 0.0, 0.0])
+                    pdf = multivariate_normal.pdf(x, mu, S)
+                    assignment_profit[j,i] = pdf
                 
-                assignment_profit[j,i] = pdf
+                except np.linalg.linalg.LinAlgError as e:
+                    print e
+                    assignment_profit[j,i] = -1
                 
                 odom_det = EKF_with_HMM.get_odom_detection(detection, trafo_cam_in_odom, cam_calib)
                 eucl_distance = np.hypot(odom_det["x"] - track.mu[0], odom_det["y"] - track.mu[1])

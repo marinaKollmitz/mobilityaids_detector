@@ -7,7 +7,7 @@ class EKF_with_HMM:
 
         self.track_id = track_id
         
-        self.accel_noise = 15.0 #noise in acceleration, in meters/sec^2
+        self.accel_noise = 20.0 #noise in acceleration, in meters/sec^2
         self.height_noise = 0.25 #noise in height of person, in m
         
         trafo_cam_in_odom = np.linalg.inv(trafo_odom_in_cam)

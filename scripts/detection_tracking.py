@@ -58,7 +58,7 @@ class Detector:
         hmm_observation_model = np.loadtxt(val_dir + "observation_model.txt", delimiter=',')
         self.tracker = Tracker(hmm_observation_model)
         
-        self.cla_thresholds = [0.0, 0.75, 0.974177, 0.927037, 0.865749, 0.887909]
+        self.cla_thresholds = [0.0, 0.25, 0.9, 0.9, 0.85, 0.85]
         
         self.tfl = tf.TransformListener()
         self.dt = -1
@@ -252,6 +252,17 @@ class Detector:
                         inside_ratio = self.get_inside_ratio(outside_det['bbox'], inside_det['bbox'])
                         if inside_ratio > inside_ratio_thres:
                             print "filtering pedestrian bbox ", inside_det
+                            print "inside_ratio", inside_ratio
+                            detections.remove(inside_det)
+            
+            #check for push_wheelchair detection
+            if outside_det['class'] is 5:
+                for inside_det in detections:
+                    #check all wheelchair detections against push wheelchair detection
+                    if inside_det['class'] is 4:
+                        inside_ratio = self.get_inside_ratio(outside_det['bbox'], inside_det['bbox'])
+                        if inside_ratio > inside_ratio_thres:
+                            print "filtering wheelchair bbox ", inside_det
                             print "inside_ratio", inside_ratio
                             detections.remove(inside_det)
     
