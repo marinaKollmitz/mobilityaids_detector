@@ -1,7 +1,4 @@
-# -*- coding: utf-8 -*-
-
-import matplotlib
-matplotlib.use('TkAgg')
+#! /usr/bin/env python
 
 import core.test_engine as infer_engine
 from core.config import cfg
@@ -16,9 +13,8 @@ from cv_bridge import CvBridge, CvBridgeError
 from mobilityaids_detector.msg import Detection, Detections
 from sensor_msgs.msg import CameraInfo
 from visualization_msgs.msg import Marker, MarkerArray
-from geometry_msgs.msg import Point, PointStamped
+from geometry_msgs.msg import Point
 import tf
-from std_msgs.msg import Header
 from tracker import Tracker
 
 class Detector:
