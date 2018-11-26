@@ -22,16 +22,15 @@ from std_msgs.msg import Header
 from tracker import Tracker
 import cv2
 
-import matplotlib.pyplot as plt
-
 class Detector:
     def __init__(self):
         
-        train_dir = '/home/kollmitz/tools/detectron_depth/final_models/RGB/VGG16-CNN-N-1024_RGB_hospital_hosponly/train/hospital_train_RGB_DepthfromDJ_new/generalized_rcnn/'
-        val_dir = '/home/kollmitz/tools/detectron_depth/final_models/RGB/VGG16-CNN-N-1024_RGB_hospital_hosponly/test/hospital_test2_comb_RGB_Depth/generalized_rcnn/'
+        train_dir = '/home/vasquez/tools/detectron_depth/final_models/RGB/googlenet_xxs_RGB_hospital/train/hospital_train_RGB_DepthfromDJ_new/generalized_rcnn/'
+        val_dir = '/home/vasquez/tools/detectron_depth/final_models/RGB/VGG16-CNN-N-1024_RGB_hospital_hosponly/test/hospital_test2_comb_RGB_Depth/generalized_rcnn/'
         
         weights_file = train_dir + "model_final.pkl"
-        config_file = "/home/kollmitz/tools/detectron_depth/final_models/RGB/VGG16-CNN-N-1024_RGB_hospital_hosponly/faster_rcnn_VGG16_CNN_M_1024_RGB.yaml"
+        config_file = "/home/vasquez/tools/detectron_depth/configs/hospital_detection/faster_rcnn_googlenet_xxs_RGB.yaml"
+
         merge_cfg_from_file(config_file)
         cfg.TEST.WEIGHTS = weights_file
         cfg.NUM_GPUS = 1
@@ -56,11 +55,10 @@ class Detector:
         self.classnames = ["background", "pedestrian", "crutches", "walking_frame", "wheelchair", "push_wheelchair"]
         
         #initialize position, velocity and class tracker
-        time_delta = 0.5
         hmm_observation_model = np.loadtxt(val_dir + "observation_model.txt", delimiter=',')
         self.tracker = Tracker(hmm_observation_model)
         
-        self.cla_thresholds = [0.0, 0.128528, 0.974177, 0.924291, 0.842623, 0.915776]
+        self.cla_thresholds = [0.0, 0.75, 0.974177, 0.927037, 0.865749, 0.887909]
         
         self.tfl = tf.TransformListener()
         self.dt = -1
@@ -106,14 +104,17 @@ class Detector:
         
         return trafo_cam_in_odom
     
-    def get_detection(self, pos, confidence, category):
+    def get_detection(self, pos, vel, confidence, category, track_id):
                 
         det = Detection()
         det.category = self.classnames[category]
-        det.track_id = 0
+        det.track_id = track_id
         det.position.x = pos.x
         det.position.y = pos.y
         det.position.z = pos.z
+        det.velocity.x = vel.x
+        det.velocity.y = vel.y
+        det.velocity.z = 0.0
         det.confidence = confidence
         
         return det
@@ -315,8 +316,13 @@ class Detector:
             pos.x = tracker_mu[0,0] 
             pos.y = tracker_mu[1,0] 
             pos.z = tracker_mu[2,0]
+
+            vel = Point()
+            vel.x = tracker_mu[3,0]
+            vel.y = tracker_mu[4,0]
+            vel.z = 0.0
             
-            tracker_det = self.get_detection(pos, track.hmm.get_max_score(), track.hmm.get_max_class())
+            tracker_det = self.get_detection(pos, vel, track.hmm.get_max_score(), track.hmm.get_max_class(), track.track_id)
             tracker_detections.detections.append(tracker_det)
             
             cov = tracker_sigma[0:2,0:2]
