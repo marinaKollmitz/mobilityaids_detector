@@ -1,0 +1,13 @@
+<?xml version="1.0"?>
+<launch>
+
+  <!-- detection and tracking module --> 
+  <node name="mobilityais_detector" type="detection_tracking.py" pkg="mobilityaids_detector" />
+  
+  <!-- tf frames -->
+  <node name="tf_frames" type="static_transform_publisher" pkg="tf" args="0 0 1.0 0.530 0.544 -0.466 -0.454 odom camera_rgb_optical_frame 10" /> 
+
+  <!-- rviz -->
+  <node pkg="rviz" type="rviz" name="rviz" output="screen" args="-d $(find mobilityaids_detector)/cfg/config.rviz"/>
+
+</launch>
