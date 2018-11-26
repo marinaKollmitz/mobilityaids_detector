@@ -20,16 +20,15 @@ from geometry_msgs.msg import Point, PointStamped
 import tf
 from std_msgs.msg import Header
 from tracker import Tracker
-import cv2
 
 class Detector:
     def __init__(self):
         
-        train_dir = '/home/vasquez/tools/detectron_depth/final_models/RGB/googlenet_xxs_RGB_hospital/train/hospital_train_RGB_DepthfromDJ_new/generalized_rcnn/'
-        val_dir = '/home/vasquez/tools/detectron_depth/final_models/RGB/VGG16-CNN-N-1024_RGB_hospital_hosponly/test/hospital_test2_comb_RGB_Depth/generalized_rcnn/'
+        train_dir = '/home/kollmitz/tools/detectron_depth/final_models/RGB/googlenet_xxs_RGB_hospital/train/hospital_train_RGB_DepthfromDJ_new/generalized_rcnn/'
+        val_dir = '/home/kollmitz/tools/detectron_depth/final_models/RGB/VGG16-CNN-N-1024_RGB_hospital_hosponly/test/hospital_test2_comb_RGB_Depth/generalized_rcnn/'
         
         weights_file = train_dir + "model_final.pkl"
-        config_file = "/home/vasquez/tools/detectron_depth/configs/hospital_detection/faster_rcnn_googlenet_xxs_RGB.yaml"
+        config_file = "/home/kollmitz/tools/detectron_depth/configs/hospital_detection/faster_rcnn_googlenet_xxs_RGB.yaml"
 
         merge_cfg_from_file(config_file)
         cfg.TEST.WEIGHTS = weights_file
@@ -331,7 +330,7 @@ class Detector:
             marker = self.get_marker(header, pos, color_box, track.track_id, cov)
             markers.markers.append(marker)
         
-        image = self.bridge.cv2_to_imgmsg(image, encoding="passthrough")
+        image = self.bridge.cv2_to_imgmsg(image)
         image.header = self.last_image.header
         
         #publish messages
@@ -340,10 +339,35 @@ class Detector:
         self.cam_info_pub.publish(self.camera_info)
         self.det_pub.publish(tracker_detections)
     
+    def resize_and_color(self, image):
+        
+        #resize to network input size
+        (h, w) = image.shape[:2]
+        
+        ratio_w = 960./w
+        ratio_h = 540./h
+        
+        im_ratio = np.min([ratio_h, ratio_w])
+        
+        h_new = int(h*im_ratio)
+        w_new = int(w*im_ratio)
+        
+        image = cv2.resize(image, (w_new, h_new))
+        
+        #add border to make sure the image has the correct input size while keeping the original aspect ratio
+        cv2.copyMakeBorder(image, int(float(540-h_new)/2), int(float(540-h_new)/2), int(float(960-w_new)/2), int(float(960-w_new)/2), cv2.BORDER_CONSTANT)
+        
+        #change image color
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        
+        return image
+    
     def process_last_image(self):
         
         if self.new_image:
-            image = self.bridge.imgmsg_to_cv2(self.last_image, "passthrough")
+            image = self.bridge.imgmsg_to_cv2(self.last_image)
+            image = self.resize_and_color(image)
+            
             #image = cv2.imread("/home/kollmitz/datasets/mobility-aids/Images/seq_1468843742.5302676900.png")
             with c2_utils.NamedCudaScope(0):
                 cls_boxes, cls_depths, cls_segms, cls_keyps = infer_engine.im_detect_all(
