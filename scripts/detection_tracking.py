@@ -85,8 +85,8 @@ class Detector:
         trafo_cam_in_odom = None
         
         try:
-            self.tfl.waitForTransform("odom", "kinect2_rgb_optical_frame", rospy.Time(0), rospy.Duration(0.5))
-            pos, quat = self.tfl.lookupTransform("odom", "kinect2_rgb_optical_frame", rospy.Time(0))
+            self.tfl.waitForTransform("odom", "camera_rgb_optical_frame", rospy.Time(0), rospy.Duration(0.5))
+            pos, quat = self.tfl.lookupTransform("odom", "camera_rgb_optical_frame", rospy.Time(0))
             
             trans = tf.transformations.translation_matrix(pos)
             rot = tf.transformations.quaternion_matrix(quat)
