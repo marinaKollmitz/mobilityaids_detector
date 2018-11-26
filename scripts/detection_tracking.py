@@ -40,8 +40,8 @@ class Detector:
         self.model = infer_engine.initialize_model_from_cfg()
         self.bridge = CvBridge()
     
-        rospy.Subscriber("/kinect2/qhd/image_color_rect", Image, self.image_callback, queue_size=1) 
-        rospy.Subscriber("/kinect2/qhd/camera_info", CameraInfo, self.cam_info_callback, queue_size=1)
+        rospy.Subscriber("/camera/color/image_raw", Image, self.image_callback, queue_size=1) 
+        rospy.Subscriber("/camera/color/camera_info", CameraInfo, self.cam_info_callback, queue_size=1)
         
         self.image_viz_pub = rospy.Publisher("mobility_aids/image", Image, queue_size=1)
         self.rviz_viz_pub = rospy.Publisher("mobility_aids/vis", MarkerArray, queue_size=1)
