@@ -1,225 +1,305 @@
 #! /usr/bin/env python
 
-import core.test_engine as infer_engine
-from core.config import cfg
-from core.config import merge_cfg_from_file
-from core.config import assert_and_infer_cfg
+import detectron #for finding detectron path
+import detectron.core.test_engine as infer_engine
+import detectron.utils.c2 as c2_utils
+from detectron.core.config import cfg, merge_cfg_from_file, assert_and_infer_cfg
+from detectron.core.track_engine import validate_tracking_params
+from detectron.utils.vis import convert_from_cls_format
+
+import multiclass_tracking
+from multiclass_tracking.tracker import Tracker
+from multiclass_tracking.viz import Visualizer
+from multiclass_tracking.image_projection import ImageProjection
+
+from dynamic_reconfigure.server import Server
+from mobilityaids_detector.cfg import TrackingParamsConfig
+from mobilityaids_detector.msg import Detection, Detections
+
+from sensor_msgs.msg import CameraInfo, Image
+from visualization_msgs.msg import Marker, MarkerArray
+
+from cv_bridge import CvBridge
 import cv2
-import utils.c2 as c2_utils
 import numpy as np
 import rospy
-from sensor_msgs.msg import Image
-from cv_bridge import CvBridge, CvBridgeError
-from mobilityaids_detector.msg import Detection, Detections
-from sensor_msgs.msg import CameraInfo
-from visualization_msgs.msg import Marker, MarkerArray
-from geometry_msgs.msg import Point
 import tf
-from tracker import Tracker
+import os
+import inspect
+import logging
+
+#dirty hack to fix python logging with ROS
+detectron.core.track_engine.logger.addHandler(logging.StreamHandler())
+detectron.core.test_engine.logger.addHandler(logging.StreamHandler())
+multiclass_tracking.tracker.logger.addHandler(logging.StreamHandler())
 
 class Detector:
+    
     def __init__(self):
         
-        train_dir = '/home/kollmitz/tools/detectron_depth/final_models/RGB/googlenet_xxs_RGB_hospital/train/hospital_train_RGB_DepthfromDJ_new/generalized_rcnn/'
-        val_dir = '/home/kollmitz/tools/detectron_depth/final_models/RGB/VGG16-CNN-N-1024_RGB_hospital_hosponly/test/hospital_test2_comb_RGB_Depth/generalized_rcnn/'
+        detectron_root = os.path.join(os.path.dirname(inspect.getfile(detectron)), os.pardir)
+        config_file = os.path.join(detectron_root, "mobilityaids_models/VGG-M/faster_rcnn_VGG-M_RGB.yaml")
         
-        weights_file = train_dir + "model_final.pkl"
-        config_file = "/home/kollmitz/tools/detectron_depth/configs/hospital_detection/faster_rcnn_googlenet_xxs_RGB.yaml"
-
+        if not os.path.exists(config_file):
+            rospy.logerr("config file %s does not exist, please see https://github.com/marinaKollmitz/mobilityaids_detector for detector setup" % config_file)
+            exit(0)
+        
         merge_cfg_from_file(config_file)
-        cfg.TEST.WEIGHTS = weights_file
-        cfg.NUM_GPUS = 1
-    
+        
+        #absolute output dir path
+        cfg.OUTPUT_DIR = os.path.join(detectron_root, cfg.OUTPUT_DIR)
+        
+        weights_file = os.path.join(detectron_root, cfg.TEST.WEIGHTS)
+        val_dataset = cfg.TRACK.VALIDATION_DATASET
+
         assert_and_infer_cfg()
-        self.model = infer_engine.initialize_model_from_cfg()
-        self.bridge = CvBridge()
-    
-        rospy.Subscriber("/camera/color/image_raw", Image, self.image_callback, queue_size=1) 
-        rospy.Subscriber("/camera/color/camera_info", CameraInfo, self.cam_info_callback, queue_size=1)
+        self.model = infer_engine.initialize_model_from_cfg(weights_file)
         
-        self.image_viz_pub = rospy.Publisher("mobility_aids/image", Image, queue_size=1)
-        self.rviz_viz_pub = rospy.Publisher("mobility_aids/vis", MarkerArray, queue_size=1)
-        self.det_pub = rospy.Publisher("mobility_aids/detections", Detections, queue_size=1)
-        self.cam_info_pub = rospy.Publisher("mobility_aids/camera_info", CameraInfo, queue_size=1)
+        #initialize tracker
+        class_thresh, obs_model, meas_cov  = validate_tracking_params(weights_file, 
+                                                                      val_dataset)
+        self.tracker = Tracker(meas_cov, obs_model, use_hmm=True)
+        self.dt = None #set from image topic timestamps
+        self.classnames = ["background", "person", "crutches", "walking_frame", "wheelchair", "push_wheelchair"]
+        self.cla_thresholds = class_thresh
         
-        
-        self.last_image = None
+        self.last_received_image = None #set from image topic
+        self.last_processed_image = None #set from image topic
         self.new_image = False
         
-        self.camera_info = None
-        self.classnames = ["background", "pedestrian", "crutches", "walking_frame", "wheelchair", "push_wheelchair"]
+        self.cam_calib = None #set from camera info
+        self.camera_frame = None #set from camera info
         
-        #initialize position, velocity and class tracker
-        hmm_observation_model = np.loadtxt(val_dir + "observation_model.txt", delimiter=',')
-        self.tracker = Tracker(hmm_observation_model)
+        #read rosparams
+        self.fixed_frame = rospy.get_param('~fixed_frame', 'odom')
+        self.tracking = rospy.get_param('~tracking', True)
+        self.filter_detections = rospy.get_param('~filter_inside_boxes', True)
+        camera_topic = rospy.get_param('~camera_topic', '/kinect2/qhd/image_color_rect')
+        camera_info_topic = rospy.get_param('~camera_info_topic', '/kinect2/qhd/camera_info')
         
-        self.cla_thresholds = [0.0, 0.75, 0.974177, 0.927037, 0.865749, 0.887909]
+        rospy.Subscriber(camera_topic, Image, self.image_callback, queue_size=1) 
+        rospy.Subscriber(camera_info_topic, CameraInfo, self.cam_info_callback, queue_size=1)
         
+        #dynamic reconfigure server
+        Server(TrackingParamsConfig, self.reconfigure_callback)
+        
+        #initialize publisher
+        self.dets_image_pub = rospy.Publisher("~dets_image", Image, queue_size=1)
+        self.tracks_image_pub = rospy.Publisher("~tracks_image", Image, queue_size=1)
+        self.rviz_dets_pub = rospy.Publisher("~dets_vis", MarkerArray, queue_size=1)
+        self.rviz_tracks_pub = rospy.Publisher("~tracks_vis", MarkerArray, queue_size=1)
+        self.det_pub = rospy.Publisher("~detections", Detections, queue_size=1)
+        self.track_pub = rospy.Publisher("~tracks", Detections, queue_size=1)
+        
+        self.viz_helper = Visualizer(len(self.classnames))
+        self.bridge = CvBridge()
         self.tfl = tf.TransformListener()
-        self.dt = -1
-
-    def convert_from_cls_format(self, cls_boxes, cls_depths):
-        """Convert from the class boxes/segms/keyps format generated by the testing
-        code.
-        """
-        box_list = [b for b in cls_boxes if len(b) > 0]
-        if len(box_list) > 0:
-            boxes = np.concatenate(box_list)
-        else:
-            boxes = None
-        if cls_depths is not None:
-            depth_list = [b for b in cls_depths if len(b) > 0]
-            if len(depth_list) > 0:
-                depths = np.concatenate(depth_list)
-            else:
-                depths = None
-        else:
-            depths = None
-        classes = []
-        for j in range(len(cls_boxes)):
-            classes += [j] * len(cls_boxes[j])
-        return boxes, depths, classes
     
-    def get_trafo_cam_in_odom(self, time):
+    def reconfigure_callback(self, config, level):
         
-        trafo_cam_in_odom = None
+        pos_cov_threshold = config["pos_cov_threshold"]
+        mahalanobis_threshold = config["mahalanobis_max_dist"]
+        euclidean_threshold = config["euclidean_max_dist"]
         
-        try:
-            self.tfl.waitForTransform("odom", "camera_rgb_optical_frame", rospy.Time(0), rospy.Duration(0.5))
-            pos, quat = self.tfl.lookupTransform("odom", "camera_rgb_optical_frame", rospy.Time(0))
-            
-            trans = tf.transformations.translation_matrix(pos)
-            rot = tf.transformations.quaternion_matrix(quat)
-            
-            #this is the transformation we get from the files in tracking
-            trafo_cam_in_odom = np.dot(trans, rot)
+        accel_noise = config["accel_noise"]
+        height_noise = config["height_noise"]
+        init_vel_sigma = config["init_vel_sigma"]
+        hmm_transition_prob = config["hmm_transition_prob"]
         
-        except (Exception) as e:
-            print e
+        use_hmm = config["use_hmm"]
         
-        return trafo_cam_in_odom
+        self.tracker.set_thresholds(pos_cov_threshold, mahalanobis_threshold, 
+                                    euclidean_threshold)
+        
+        self.tracker.set_tracking_config(accel_noise, height_noise,
+                                         init_vel_sigma, hmm_transition_prob,
+                                         use_hmm)
+        
+        return config
     
-    def get_detection(self, pos, vel, confidence, category, track_id):
-                
-        det = Detection()
-        det.category = self.classnames[category]
-        det.track_id = track_id
-        det.position.x = pos.x
-        det.position.y = pos.y
-        det.position.z = pos.z
-        det.velocity.x = vel.x
-        det.velocity.y = vel.y
-        det.velocity.z = 0.0
-        det.confidence = confidence
+    def get_trafo_odom_in_cam(self):
         
-        return det
+        trafo_odom_in_cam = None
         
-    def get_measurement(self, bbox, confidence, depth, category):
-        
-        measurement = {}
-        
-        im_x = (bbox[0]+bbox[2])/2
-        im_y = (bbox[1]+bbox[3])/2
-        
-        measurement["bbox"] = bbox
-        measurement["im_x"] = im_x
-        measurement["im_y"] = im_y
-        measurement["depth"] = depth
-        measurement["class"] = category
-        
-        return measurement
-    
-    def get_marker(self, header, position, color, marker_id, cov=None):
-        
-        marker = Marker()
-        marker.header = header
-        marker.id = marker_id
-        marker.ns = "mobility_aids"
-        marker.type = Marker.SPHERE
-        marker.action = Marker.ADD
-        marker.pose.position = position
-        marker.color.b = float(color[0])/255
-        marker.color.g = float(color[1])/255
-        marker.color.r = float(color[2])/255
-        marker.color.a = 1.0
-        marker.lifetime = rospy.Duration()
-        
-        #no covariance info, just plot constant radius
-        if cov is None:
-            marker.scale.x = 0.5
-            marker.scale.y = 0.5
-            marker.scale.z = 0.5
-            marker.pose.orientation.w = 1
+        if self.camera_frame is not None:
             
-        #plot error ellipse at sigma confidence interval
-        else:
             try:
-                cov = cov[0:2,0:2]
-                eigenvals, eigenvecs = np.linalg.eig(cov)
-                #get largest eigenvalue and eigenvector
-                max_ind = np.argmax(eigenvals)
-                max_eigvec = eigenvecs[:,max_ind]
-                max_eigval = eigenvals[max_ind]
-    
-                if max_eigval < 0.00001 or max_eigval == np.nan:
-                    print "max eigenval", max_eigval
-                    return
+                time = self.last_processed_image.header.stamp
+                self.tfl.waitForTransform(self.camera_frame, self.fixed_frame, time, rospy.Duration(0.5))
+                pos, quat = self.tfl.lookupTransform(self.camera_frame, self.fixed_frame, time)
                 
-                #get smallest eigenvalue and eigenvector
-                min_ind = 0
-                if max_ind == 0:
-                    min_ind = 1
+                trans = tf.transformations.translation_matrix(pos)
+                rot = tf.transformations.quaternion_matrix(quat)
+                
+                trafo_odom_in_cam = np.dot(trans, rot)
             
-                min_eigval = eigenvals[min_ind]
-            
-                #chi-square value for sigma confidence interval
-                chisquare_scale = 2.2789  
-            
-                #calculate width and height of confidence ellipse
-                width = 2 * np.sqrt(chisquare_scale*max_eigval)
-                height = 2 * np.sqrt(chisquare_scale*min_eigval)
-                angle = np.arctan2(max_eigvec[1],max_eigvec[0])
-                angle = angle + np.pi/2 #TODO is this correct?
-                
-                quat = tf.transformations.quaternion_from_euler(0, 0, angle)
-                
-                marker.pose.orientation.x = quat[0]
-                marker.pose.orientation.y = quat[1]
-                marker.pose.orientation.z = quat[2]
-                marker.pose.orientation.w = quat[3]
-                
-                marker.scale.x = height
-                marker.scale.y = width
-                marker.scale.z = 0.1
-                
-            except np.linalg.linalg.LinAlgError as e:
-                print 'cov', cov
+            except (Exception) as e:
                 print e
         
-        return marker
+        else:
+            rospy.logerr("camera frame not set, cannot get trafo between camera and fixed frame")
+        
+        return trafo_odom_in_cam
+
+    def get_detections(self, image):
+        
+        cls_boxes, cls_depths, cls_segms, cls_keyps = infer_engine.im_detect_all(
+                    self.model, image, None)
+        
+        boxes, depths, _segms, _keyps, classes = convert_from_cls_format(cls_boxes, 
+                                                                         cls_depths, 
+                                                                         None, 
+                                                                         None)
+        detections = []
+        
+        for i in range(len(classes)):
+            detection = {}
+            
+            detection["bbox"] = boxes[i, :4]
+            detection["score"] = boxes[i, -1]
+            detection["depth"] = depths[i]
+            detection["category_id"] = classes[i]
+            
+            if detection["score"] > self.cla_thresholds[self.classnames[detection["category_id"]]]:
+                detections.append(detection)
+        
+        if self.filter_detections:
+            self.filter_inside_boxes(detections)
+        
+        return detections
     
-    def delete_last_markers(self):
+    def mark_detections(self, image, detections):
         
-        delete_marker = Marker()
-        delete_markers = MarkerArray()
-        delete_marker.action = Marker.DELETEALL
-        delete_markers.markers.append(delete_marker)
-        
-        self.rviz_viz_pub.publish(delete_markers)
+        for detection in detections:
+            bbox = detection["bbox"]
+            cla = detection["category_id"]
+            color_box = self.viz_helper.colors_box[cla]
+            color = [255*color_box[2], 255*color_box[1], 255*color_box[0]]
+            cv2.rectangle(image, 
+                          (int(bbox[0]), int(bbox[1])), 
+                          (int(bbox[2]), int(bbox[3])), 
+                          color, 3)
     
-    def get_cam_calib(self):
+    def update_tracker(self, detections):
         
-        cam_calib = {}
-        if self.camera_info is not None:
-            #camera calibration
-            cam_calib["fx"] = self.camera_info.K[0]
-            cam_calib["cx"] = self.camera_info.K[2]
-            cam_calib["fy"] = self.camera_info.K[4]
-            cam_calib["cy"] = self.camera_info.K[5]
+        if self.dt is not None:
+            self.tracker.predict(self.dt)
+            
+            trafo_odom_in_cam = self.get_trafo_odom_in_cam()
+            
+            if (trafo_odom_in_cam is not None) and (self.cam_calib is not None):
+                self.tracker.update(detections, trafo_odom_in_cam, self.cam_calib)
+    
+    def publish_image_vis(self, image, detections, publisher):
         
-        return cam_calib
+        dets_image = image.copy()
+        self.mark_detections(dets_image, detections)
+        
+        dets_image = self.bridge.cv2_to_imgmsg(dets_image)
+        dets_image.header = self.last_processed_image.header
+        publisher.publish(dets_image)
+    
+    def publish_rviz_marker(self,  publisher, classes, positions, pos_covariances=None, track_ids=None):
+        
+        markers = MarkerArray()
+
+        for i in range(len(classes)):
+            
+            cla = classes[i]
+            
+            #setup marker
+            marker = Marker()
+            marker.header.stamp = self.last_processed_image.header.stamp
+            marker.header.frame_id = positions[i]["frame_id"]
+            
+            if track_ids is not None:
+                marker.id = track_ids[i]
+            else:
+                marker.id = i
+                
+            marker.ns = "mobility_aids"
+            marker.type = Marker.SPHERE
+            marker.action = Marker.MODIFY
+            if self.dt is not None:
+                marker.lifetime = rospy.Duration(self.dt)
+            else:
+                marker.lifetime = rospy.Duration(0.1)
+            #maker position
+            marker.pose.position.x = positions[i]["x"]
+            marker.pose.position.y = positions[i]["y"]
+            marker.pose.position.z = positions[i]["z"]
+            
+            #marker color
+            color_box = self.viz_helper.colors_box[cla]
+            marker.color.b = float(color_box[2])
+            marker.color.g = float(color_box[1])
+            marker.color.r = float(color_box[0])
+            marker.color.a = 1.0
+            
+            #get error ellipse
+            width, height, scale, angle = 0.5, 0.5, 0.5, 0.0
+            
+            #if a pose covariance is given, like for tracking, plot ellipse marker
+            if pos_covariances is not None:
+                width, height, angle = Visualizer.get_error_ellipse(pos_covariances[i])
+                angle = angle + np.pi/2
+                scale = 0.1
+            
+            quat = tf.transformations.quaternion_from_euler(0, 0, angle)
+            marker.pose.orientation.x = quat[0]
+            marker.pose.orientation.y = quat[1]
+            marker.pose.orientation.z = quat[2]
+            marker.pose.orientation.w = quat[3]
+            marker.scale.x = height
+            marker.scale.y = width
+            marker.scale.z = scale
+            
+            markers.markers.append(marker)
+            
+        publisher.publish(markers)
+    
+    def publish_detection_msg(self, im_detections, publisher, positions=None, velocities=None, track_ids=None):
+        
+        detections = Detections()
+        
+        detections.header = self.last_processed_image.header
+        
+        for i in range(len(im_detections)):
+            detection = Detection()
+            detection.category = self.classnames[im_detections[i]["category_id"]]
+            detection.confidence = im_detections[i]["score"]
+            detection.image_bbox.x_min = im_detections[i]["bbox"][0]
+            detection.image_bbox.y_min = im_detections[i]["bbox"][1]
+            detection.image_bbox.x_max = im_detections[i]["bbox"][2]
+            detection.image_bbox.y_max = im_detections[i]["bbox"][3]
+            detection.depth = im_detections[i]["depth"]
+            
+            if positions is not None:
+                detection.position.header.stamp = self.last_processed_image.header.stamp
+                detection.position.header.frame_id = positions[i]["frame_id"]
+                detection.position.point.x = positions[i]["x"]
+                detection.position.point.y = positions[i]["y"]
+                detection.position.point.z = positions[i]["z"]
+                
+            if velocities is not None:
+                detection.velocity.header.stamp = self.last_processed_image.header.stamp
+                detection.velocity.header.frame_id = velocities[i]["frame_id"]
+                detection.velocity.point.x = velocities[i]["x"]
+                detection.velocity.point.y = velocities[i]["y"]
+                detection.velocity.point.z = velocities[i]["z"]
+            
+            if track_ids is not None:
+                detection.track_id = track_ids[i]
+            
+            else:
+                detection.track_id = -1
+                
+            detections.detections.append(detection)
+        
+        publisher.publish(detections)
     
     def get_inside_ratio(self, bbox_out, bbox_in):
+        
         overlap_bbox=[0,0,0,0]
         overlap_bbox[0] = max(bbox_out[0], bbox_in[0]);
         overlap_bbox[1] = max(bbox_out[1], bbox_in[1]);
@@ -236,174 +316,131 @@ class Detector:
         return inside_ratio
     
     def filter_inside_boxes(self, detections, inside_ratio_thres = 0.8):
+        #filter pedestrian bounding box inside mobilityaids bounding box
         
         for outside_det in detections:
             
             # check for mobility aids bboxes
-            if outside_det['class'] > 1:
+            if outside_det['category_id'] > 1:
                 for inside_det in detections:
                     #check all pedestrian detections against mobility aids detection
-                    if inside_det['class'] is 1:
+                    if inside_det['category_id'] is 1:
                         inside_ratio = self.get_inside_ratio(outside_det['bbox'], inside_det['bbox'])
                         if inside_ratio > inside_ratio_thres:
-                            print "filtering pedestrian bbox ", inside_det
-                            print "inside_ratio", inside_ratio
+                            rospy.logdebug("filtering pedestrian bbox inside %s bbox" % self.classnames[outside_det['category_id']])
                             detections.remove(inside_det)
     
-    def process_detections(self, image, cls_boxes, cls_depths, thresh = 0.9):
+    def publish_results(self, image, detections):
         
-        measurements = []
-        tracker_detections = Detections()
-        tracker_detections.header = self.last_image.header
-        tracker_detections.header.frame_id = "odom"
+        #image detections projected into cartesian space
+        projected_det_positions = []
+        for detection in detections:
+            cart_det = ImageProjection.get_cart_detection(detection, self.cam_calib)
+            cart_det["frame_id"] = self.last_processed_image.header.frame_id
+            projected_det_positions.append(cart_det)
+        detection_classes = [detection["category_id"] for detection in detections]
         
-        boxes, depths, classes = self.convert_from_cls_format(cls_boxes, cls_depths)
-        trafo_cam_in_odom = self.get_trafo_cam_in_odom(self.last_image.header.stamp)
+        #publish detection images
+        self.publish_image_vis(image, detections, self.dets_image_pub)
         
-        #bgr
-        colors_box = [[1, 1, 1], #black
-                      [39,167,0], #green
-                      [0,0,191], #red
-                      [0,255,255], #yellow
-                      [255,0,228], #pink
-                      [0,101,255]] #orange
+        #publish detection markers
+        self.publish_rviz_marker(self.rviz_dets_pub, detection_classes, 
+                                 projected_det_positions)
         
-        for i in range(len(classes)):
-            bbox = boxes[i, :4]
-            score = boxes[i, -1]
-            cla = classes[i]
-            depth = depths[i]
+        #publish detection messages
+        self.publish_detection_msg(detections, self.det_pub, positions=projected_det_positions)
+        
+        if self.tracking:
             
-            if score > thresh[cla]:
-                # draw bbox
-                color_box = colors_box[cla]
-                cv2.rectangle(image, (bbox[0], bbox[1]), (bbox[2], bbox[3]), [100,100,100], 3)
+            trafo_odom_in_cam = self.get_trafo_odom_in_cam()
+            
+            if trafo_odom_in_cam is not None:
+                #tracks projected into image space
+                track_detections = self.tracker.get_track_detections(trafo_odom_in_cam)
+        
+                #positions, velocities, ids and covariance of tracks
+                track_positions = self.tracker.get_track_positions()
+                track_vels = self.tracker.get_track_velocities()
+                track_ids = self.tracker.get_track_ids()
+                track_covs = self.tracker.get_track_covariances()
+                track_classes = [detection["category_id"] for detection in track_detections]
                 
-                # fill detections message
-                meas = self.get_measurement(bbox, score, depth, cla)
-                measurements.append(meas)
+                for track_position in track_positions:
+                    track_position["frame_id"] = self.fixed_frame
                 
-        self.filter_inside_boxes(measurements)
-        for meas in measurements:
-            bbox = meas["bbox"]
-            cv2.rectangle(image, (bbox[0], bbox[1]), (bbox[2], bbox[3]), colors_box[meas['class']], 3)
+                for track_vel in track_vels:
+                    track_vel["frame_id"] = self.fixed_frame
                 
-        #update the tracker
-        self.tracker.predict(self.dt)
+                
+                #publish detection images
+                self.publish_image_vis(image, track_detections, self.tracks_image_pub)
+                
+                #publish detection markers
+                self.publish_rviz_marker(self.rviz_tracks_pub, 
+                                         track_classes, track_positions,
+                                         pos_covariances=track_covs, track_ids=track_ids)
+                
+                #publish detection messages
+                self.publish_detection_msg(track_detections, self.track_pub, 
+                                           positions=track_positions, 
+                                           velocities=track_vels, 
+                                           track_ids=track_ids)
         
-        cam_calib = self.get_cam_calib()
-        if trafo_cam_in_odom is not None:
-            trafo_odom_in_cam = np.linalg.inv(trafo_cam_in_odom)
-            self.tracker.update(measurements, trafo_odom_in_cam, cam_calib)
-
-        #visualize tracks
-        self.delete_last_markers()
-        markers = MarkerArray()
-
-        for track in self.tracker.tracks:
-            tracker_mu = track.mu
-            tracker_sigma = track.sigma
-
-            header = self.last_image.header
-            header.frame_id = "odom"
-
-            pos = Point()
-            pos.x = tracker_mu[0,0] 
-            pos.y = tracker_mu[1,0] 
-            pos.z = tracker_mu[2,0]
-
-            vel = Point()
-            vel.x = tracker_mu[3,0]
-            vel.y = tracker_mu[4,0]
-            vel.z = 0.0
-            
-            tracker_det = self.get_detection(pos, vel, track.hmm.get_max_score(), track.hmm.get_max_class(), track.track_id)
-            tracker_detections.detections.append(tracker_det)
-            
-            cov = tracker_sigma[0:2,0:2]
-            color_box = colors_box[track.hmm.get_max_class()]
-            
-            marker = self.get_marker(header, pos, color_box, track.track_id, cov)
-            markers.markers.append(marker)
+    def process_detections(self, image, detections):
         
-        image = self.bridge.cv2_to_imgmsg(image)
-        image.header = self.last_image.header
+        if self.tracking:
+            self.update_tracker(detections)
         
         #publish messages
-        self.image_viz_pub.publish(image)
-        self.rviz_viz_pub.publish(markers)
-        self.cam_info_pub.publish(self.camera_info)
-        self.det_pub.publish(tracker_detections)
-    
-    def resize_and_color(self, image):
+        self.publish_results(image, detections)
         
-        #resize to network input size
-        (h, w) = image.shape[:2]
-        
-        ratio_w = 960./w
-        ratio_h = 540./h
-        
-        im_ratio = np.min([ratio_h, ratio_w])
-        
-        h_new = int(h*im_ratio)
-        w_new = int(w*im_ratio)
-        
-        image = cv2.resize(image, (w_new, h_new))
-        
-        #add border to make sure the image has the correct input size while keeping the original aspect ratio
-        cv2.copyMakeBorder(image, int(float(540-h_new)/2), int(float(540-h_new)/2), int(float(960-w_new)/2), int(float(960-w_new)/2), cv2.BORDER_CONSTANT)
-        
-        #change image color
-        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        
-        return image
-    
     def process_last_image(self):
         
         if self.new_image:
-            image = self.bridge.imgmsg_to_cv2(self.last_image)
-            image = self.resize_and_color(image)
+            if self.last_processed_image is not None:
+                self.dt = (self.last_received_image.header.stamp - self.last_processed_image.header.stamp).to_sec()
+            self.last_processed_image = self.last_received_image
             
-            #image = cv2.imread("/home/kollmitz/datasets/mobility-aids/Images/seq_1468843742.5302676900.png")
+            image = self.bridge.imgmsg_to_cv2(self.last_processed_image, desired_encoding="passthrough")
+            
             with c2_utils.NamedCudaScope(0):
-                cls_boxes, cls_depths, cls_segms, cls_keyps = infer_engine.im_detect_all(
-                    self.model, image, None)
+                detections = self.get_detections(image)
             
-            self.process_detections(image, cls_boxes, cls_depths, thresh=self.cla_thresholds)
+            self.process_detections(image, detections)
             self.new_image = False
 
-    def cam_info_callback(self, data):
+    def get_cam_calib(self, camera_info):
         
-        if self.camera_info is None:
-            print "camera info received"
-            self.camera_info = data
+        cam_calib = {}
+
+        #camera calibration
+        cam_calib["fx"] = camera_info.K[0]
+        cam_calib["cx"] = camera_info.K[2]
+        cam_calib["fy"] = camera_info.K[4]
+        cam_calib["cy"] = camera_info.K[5]
+        
+        return cam_calib
+
+    def cam_info_callback(self, camera_info):
+        
+        if self.cam_calib is None:
+            rospy.loginfo("camera info received")
+            self.cam_calib = self.get_cam_calib(camera_info)
+            self.camera_frame = camera_info.header.frame_id
 
     def image_callback(self, image):
         
-        if self.camera_info is not None:
-            try:
-                if self.last_image is not None:
-                    self.dt = (image.header.stamp - self.last_image.header.stamp).to_sec()
-                self.last_image = image
-                self.new_image = True
-                
-            except CvBridgeError as e:
-                print(e)
-                return
+        self.last_received_image = image
+        self.new_image = True
 
-def main(args):
+if __name__ == '__main__':
+
+    rospy.init_node('mobilityaids_detector')
+    det = Detector()
     
-    rospy.init_node('detector', anonymous=True)
-    det = Detector();
-    
-    print "waiting for images ..."
+    rospy.loginfo("waiting for images ...")
     rate = rospy.Rate(30)
     
     while not rospy.is_shutdown():
         det.process_last_image()
         rate.sleep()
-    
-    print "done"
-    
-if __name__ == '__main__':
-    main(None)
