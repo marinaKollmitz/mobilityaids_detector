@@ -38,10 +38,16 @@ class Detector:
     def __init__(self):
         
         detectron_root = os.path.join(os.path.dirname(inspect.getfile(detectron)), os.pardir)
-        config_file = os.path.join(detectron_root, "mobilityaids_models/VGG-M/faster_rcnn_VGG-M_RGB.yaml")
+        
+        #model config file - mandatory
+        config_file = rospy.get_param('~model_config', "")
         
         if not os.path.exists(config_file):
-            rospy.logerr("config file %s does not exist, please see https://github.com/marinaKollmitz/mobilityaids_detector for detector setup" % config_file)
+            rospy.logerr("config file '{}' does not exist. ".format(config_file) + 
+                         "Please specify a valid model config file for the " +
+                         "model_config ros param. See " +
+                         "https://github.com/marinaKollmitz/mobilityaids_detector " +
+                         "for setup instructions")
             exit(0)
         
         merge_cfg_from_file(config_file)
@@ -393,7 +399,16 @@ class Detector:
         
         #publish messages
         self.publish_results(image, detections)
+    
+    def convert_to_DepthJet(self, depth_image):
         
+        min_val, max_val, _min_loc, _max_loc = cv2.minMaxLoc(depth_image)
+        
+        depthJet_image = cv2.convertScaleAbs(depth_image, None, 255 / (max_val-min_val), -min_val); 
+        depthJet_image = cv2.applyColorMap(depthJet_image, cv2.COLORMAP_JET)
+        
+        return depthJet_image
+    
     def process_last_image(self):
         
         if self.new_image:
@@ -402,6 +417,10 @@ class Detector:
             self.last_processed_image = self.last_received_image
             
             image = self.bridge.imgmsg_to_cv2(self.last_processed_image, desired_encoding="passthrough")
+            
+            if len(image.shape) < 3:
+                #it is a 1-channel image, we assume it is a depth image
+                image = self.convert_to_DepthJet(image)
             
             with c2_utils.NamedCudaScope(0):
                 detections = self.get_detections(image)
