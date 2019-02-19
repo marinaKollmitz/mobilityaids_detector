@@ -1,5 +1,21 @@
 # mobilityaids_detector
-ROS node for 3D perception of people and their mobility aids, using the Faster R-CNN framework.  
+ROS node for 3D detection and tracking of people and their mobility aids, using the Faster R-CNN framework. A GPU is required to run the mobilityaids_detector at a sensible rate. 
+
+If you use our mobilityaids_detector, please cite our paper:
+
+```
+@article{kollmitz19ras,
+  author = {Marina Kollmitz and Andreas Eitel and Andres Vasquez and Wolfram Burgard},
+  title = {Deep {3D} perception of people and their mobility aids},
+  journal = {Robotics and Autonomous Systems},         
+  year = {2019},
+  issn = {0921-8890},
+  volume = {114},
+  pages = {29-40},
+  doi = {10.1016/j.robot.2019.01.011},
+  url = {http://ais.informatik.uni-freiburg.de/publications/papers/kollmitz19ras.pdf},
+}
+```
 
 ## Setup
 1. Mobilityaids Detector Code
@@ -48,4 +64,9 @@ You should see tracking visualizations in rviz, like this:
   <p>Mobilityaids Detector Demo</p>
 </div>
 
+The demo uses the RGB image stream for people perception, the depth cloud you see in the main rviz window is for reference only. The elliptical markers in the main rviz window visualize the positions and pose uncertainties of the tracks. In the lower left window you see the tracks projected into image space.    
+
 ## Tracking Configuration and ROS parameters
+
+
+For running the mobilityaids_detector on your own data, change the `camera_topic` and `camera_info_topic` accordingly. The tracking also requires tf transformations between the `fixed_frame` and the camera frame (from the `camera_info_topic`). If tf is not available, you can set the `tracking` ros param to false and use the detection only.  
