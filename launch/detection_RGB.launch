@@ -1,6 +1,7 @@
 <?xml version="1.0"?>
 <launch>
 
+  <arg name="model_config" default=""/>
   <arg name="camera_topic" default="/kinect2/qhd/image_color_rect"/>
   <arg name="camera_info_topic" default="/kinect2/qhd/camera_info"/>
   <arg name="fixed_frame" default="odom"/>
@@ -10,6 +11,7 @@
 
   <!-- detection and tracking module --> 
   <node name="mobilityais_detector" type="detection_tracking.py" pkg="mobilityaids_detector" output="screen">
+      <param name="model_config" type="string" value="$(arg model_config)"/>
       <param name="camera_topic" type="string" value="$(arg camera_topic)"/>
       <param name="camera_info_topic" type="string" value="$(arg camera_info_topic)"/>
       <param name="fixed_frame" type="string" value="$(arg fixed_frame)"/>
