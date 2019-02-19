@@ -409,6 +409,36 @@ class Detector:
         
         return depthJet_image
     
+    def get_image(self, image_msg):
+        
+        image = self.bridge.imgmsg_to_cv2(self.last_processed_image, desired_encoding="passthrough")
+        
+        if len(image.shape) < 3:
+            #it is a 1-channel image, we assume it is a depth image
+            image = self.convert_to_DepthJet(image)
+        
+        if "rgb" in image_msg.encoding:
+            #if the encoding is rgb, change it to bgr
+            image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+        
+        #resize to network input size
+        (h, w) = image.shape[:2]
+        
+        ratio_w = 960./w
+        ratio_h = 540./h
+        
+        im_ratio = np.min([ratio_h, ratio_w])
+        
+        h_new = int(h*im_ratio)
+        w_new = int(w*im_ratio)
+        
+        image = cv2.resize(image, (w_new, h_new))
+        
+        #add border to make sure the image has the correct input size while keeping the original aspect ratio
+        cv2.copyMakeBorder(image, int(float(540-h_new)/2), int(float(540-h_new)/2), int(float(960-w_new)/2), int(float(960-w_new)/2), cv2.BORDER_CONSTANT)
+        
+        return image
+    
     def process_last_image(self):
         
         if self.new_image:
@@ -416,11 +446,7 @@ class Detector:
                 self.dt = (self.last_received_image.header.stamp - self.last_processed_image.header.stamp).to_sec()
             self.last_processed_image = self.last_received_image
             
-            image = self.bridge.imgmsg_to_cv2(self.last_processed_image, desired_encoding="passthrough")
-            
-            if len(image.shape) < 3:
-                #it is a 1-channel image, we assume it is a depth image
-                image = self.convert_to_DepthJet(image)
+            image = self.get_image(self.last_processed_image)
             
             with c2_utils.NamedCudaScope(0):
                 detections = self.get_detections(image)
