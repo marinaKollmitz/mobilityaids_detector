@@ -52,7 +52,7 @@ wget http://mobility-aids.informatik.uni-freiburg.de/test_mobilityaids.bag
 ```
 Start the mobilityaids_detector ROS node and play the bag file:
 ``` 
-roslaunch mobilityaids_detector detection.launch
+roslaunch mobilityaids_detector detection_RGB.launch model_config:=<PATH_TO_DETECTRONDISTANCE>/mobilityaids_models/VGG-M/faster_rcnn_VGG-M_RGB.yaml 
 ```
 You should see an rviz window coming up and the console output should print "waiting for images". Now play the bag file
 ```
@@ -64,9 +64,15 @@ You should see tracking visualizations in rviz, like this:
   <p>Mobilityaids Detector Demo</p>
 </div>
 
-The demo uses the RGB image stream for people perception, the depth cloud you see in the main rviz window is for reference only. The elliptical markers in the main rviz window visualize the positions and pose uncertainties of the tracks. In the lower left window you see the tracks projected into image space.    
+The demo uses the RGB image stream for people perception, the depth cloud you see in the main rviz window is for reference only. The elliptical markers in the main rviz window visualize the positions and pose uncertainties of the tracks. In the lower left window you see the tracks projected into image space. 
 
-## Tracking Configuration and ROS parameters
+For the DepthJet detection demo, you can run:
+``` 
+roslaunch mobilityaids_detector detection_DepthJet.launch model_config:=<PATH_TO_DETECTRONDISTANCE>/mobilityaids_models/VGG-M/faster_rcnn_VGG-M_DepthJet.yaml 
+rosbag play test_mobilityaids.bag
+```
+## Tracking Configuration and ROS Parameters
 
+## Running the Mobilityaids Detector on Your Robot
 
 For running the mobilityaids_detector on your own data, change the `camera_topic` and `camera_info_topic` accordingly. The tracking also requires tf transformations between the `fixed_frame` and the camera frame (from the `camera_info_topic`). If tf is not available, you can set the `tracking` ros param to false and use the detection only.  
