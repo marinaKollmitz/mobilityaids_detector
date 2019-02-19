@@ -73,6 +73,18 @@ rosbag play test_mobilityaids.bag
 ```
 ## Tracking Configuration and ROS Parameters
 
+Dynamic Reconfigure can be used to adjust the parameters of the tracking module. Please also refer to our paper for a closer explaination of the parameters.
+
+* `pos_cov_threshold`: position covariance threshold, in [m], before the tracks are deleted. We compare the length of the major axis of the sigma confidence ellipse of the tracking state covariances. 
+* `mahalanobis_max_dist`: Mahalanobis distance threshold for pairing detections to tracks [-]
+* `euclidean_max_dist`: Euclidean distance threshold for pairing detections to tracks, in [m]
+* `accel_noise`: Noise in constant velocity assumption of person, modeled by an acceleration, in [ms^-2].  
+(ideally the parameter should work for different filter time frequencies. However, the acceleration noise does not take into account that while people can change their velocity quickly, their final velocity is limited. As a result, if the time step between frames is rather large (compared to the 0.06s we used in our RAS paper), the uncertainty in velocity and position grows large very quickly. Change this parameter if you feel the uncertainty grows large too slowly or quickly) 
+* `height_noise`: Noise in constant height assumption of person, in [m]
+* `init_vel_sigma`: Initial uncertainty in velocity, in [ms^-1]. The pose uncertainty is initialized from the sensor noise covariance
+* `hmm_transition_prob`: Transition probability of the mobilityaids classes of the HMM. How likely it is that the class changes between frames (e.g., person with crutches puts the crutches away and is now a pedestrian)
+* `use_hmm`: Whether to use the HMM component of the tracking module. If false, the tracker performs EKF updates and the mobilityaids class is determined by the last paired detection.
+
 ## Running the Mobilityaids Detector on Your Robot
 
 For running the mobilityaids_detector on your own data, change the `camera_topic` and `camera_info_topic` accordingly. The tracking also requires tf transformations between the `fixed_frame` and the camera frame (from the `camera_info_topic`). If tf is not available, you can set the `tracking` ros param to false and use the detection only.  
