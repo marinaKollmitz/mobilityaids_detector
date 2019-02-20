@@ -7,6 +7,7 @@
   <arg name="fixed_frame" default="odom"/>
   <arg name="tracking" default="true"/>
   <arg name="filter_boxes" default="true"/>
+  <arg name="inside_box_ratio" default="0.8"/>
   <arg name="rviz" default="true"/>
 
   <!-- detection and tracking module --> 
@@ -17,6 +18,7 @@
       <param name="fixed_frame" type="string" value="$(arg fixed_frame)"/>
       <param name="tracking" type="bool" value="$(arg tracking)"/>
       <param name="filter_inside_boxes" type="bool" value="$(arg filter_boxes)"/>
+      <param name="inside_box_ratio" type="double"  value="$(arg inside_box_ratio)"/>
   </node>
 
   <!-- start rviz visualization -->
