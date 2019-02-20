@@ -80,6 +80,7 @@ class Detector:
         self.fixed_frame = rospy.get_param('~fixed_frame', 'odom')
         self.tracking = rospy.get_param('~tracking', True)
         self.filter_detections = rospy.get_param('~filter_inside_boxes', True)
+        self.inside_box_ratio = rospy.get_param('~inside_box_ratio', 0.8)
         camera_topic = rospy.get_param('~camera_topic', '/kinect2/qhd/image_color_rect')
         camera_info_topic = rospy.get_param('~camera_info_topic', '/kinect2/qhd/camera_info')
         
@@ -170,7 +171,7 @@ class Detector:
                 detections.append(detection)
         
         if self.filter_detections:
-            self.filter_inside_boxes(detections)
+            self.filter_inside_boxes(detections, inside_ratio_thresh = self.inside_box_ratio)
         
         return detections
     
@@ -321,7 +322,7 @@ class Detector:
             inside_ratio = float(overlap_area)/float(bbox_in_area);
         return inside_ratio
     
-    def filter_inside_boxes(self, detections, inside_ratio_thres = 0.8):
+    def filter_inside_boxes(self, detections, inside_ratio_thresh = 0.8):
         #filter pedestrian bounding box inside mobilityaids bounding box
         
         for outside_det in detections:
@@ -332,7 +333,7 @@ class Detector:
                     #check all pedestrian detections against mobility aids detection
                     if inside_det['category_id'] is 1:
                         inside_ratio = self.get_inside_ratio(outside_det['bbox'], inside_det['bbox'])
-                        if inside_ratio > inside_ratio_thres:
+                        if inside_ratio > inside_ratio_thresh:
                             rospy.logdebug("filtering pedestrian bbox inside %s bbox" % self.classnames[outside_det['category_id']])
                             detections.remove(inside_det)
     
