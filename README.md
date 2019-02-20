@@ -85,6 +85,16 @@ Dynamic Reconfigure can be used to adjust the parameters of the tracking module.
 * `hmm_transition_prob`: Transition probability of the mobilityaids classes of the HMM. How likely it is that the class changes between frames (e.g., person with crutches puts the crutches away and is now a pedestrian)
 * `use_hmm`: Whether to use the HMM component of the tracking module. If false, the tracker performs EKF updates and the mobilityaids class is determined by the last paired detection.
 
+The mobilityaids_detector has the following ROS parameters for configuration:
+
+* `model_config`: Detectron model config file, found in `<PATH_TO_DETECTRONDISTANCE>/mobilityaids_models/<MODEL>/<...>.yaml.` Make sure the config file matches the input image stream: RGB or DepthJet
+* `camera_topic`: Topic of the input image stream (RGB or Depth). If the input images only have one channel, they are assumed to be depth images and converted to DepthJet 
+* `camera_info_topic`: Topic with camera info. We take the camera calibration and the camera frame id from the `camera_info_topic`.
+* `fixed_frame`: Fixed tf frame for tracking, like `odom`. The tracking module requires transforms between the `fixed_frame` and the camera frame, if they are not available you can set the `tracking` parameter to `false` and use the detection without tracking.
+* `tracking`: Whether or not to perform tracking on the mobilityaids detections. 
+* `filter_inside_boxes`: If `true`, the mobilityaids_detector filters pedestrian detections for which a fraction of the bounding box above `inside_box_ratio` lies inside a mobilityaids bounding box. This accounts for cases where the detector outputs a pedestrian and a mobilityaids detection for the same person. 
+* `inside_box_ratio`: threshold for filtering inside bounding boxes
+
 ## Running the Mobilityaids Detector on Your Robot
 
 For running the mobilityaids_detector on your own data, change the `camera_topic` and `camera_info_topic` accordingly. The tracking also requires tf transformations between the `fixed_frame` and the camera frame (from the `camera_info_topic`). If tf is not available, you can set the `tracking` ros param to false and use the detection only.  
