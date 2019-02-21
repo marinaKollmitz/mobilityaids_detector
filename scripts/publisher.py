@@ -26,8 +26,6 @@ class Publisher:
         self.det_pub = rospy.Publisher("~detections", Detections, queue_size=1)
         self.track_pub = rospy.Publisher("~tracks", Detections, queue_size=1)
         
-        self.last_publish_time = None
-        
     def mark_detections(self, image, detections):
         
         for detection in detections:
@@ -89,9 +87,21 @@ class Publisher:
             detections.detections.append(detection)
         
         publisher.publish(detections)
+    
+    def delete_all_markers(self, marker_publisher):
         
-    def publish_rviz_marker(self, stamp, lifetime, ros_publisher, classes, positions, 
+        delete_marker = Marker()
+        delete_markers = MarkerArray()
+        delete_marker.action = Marker.DELETEALL
+        delete_markers.markers.append(delete_marker)
+        
+        marker_publisher.publish(delete_markers)
+        
+    def publish_rviz_marker(self, stamp, ros_publisher, classes, positions, 
                             pos_covariances=None, track_ids=None):
+        
+        #remove all rviz markers before we publish the new ones
+        self.delete_all_markers(ros_publisher)
         
         markers = MarkerArray()
 
@@ -112,10 +122,8 @@ class Publisher:
             marker.ns = "mobility_aids"
             marker.type = Marker.SPHERE
             marker.action = Marker.MODIFY
-            if lifetime is not None:
-                marker.lifetime = lifetime
-            else:
-                marker.lifetime = rospy.Duration(0.1)
+            marker.lifetime = rospy.Duration()
+
             #maker position
             marker.pose.position.x = positions[i]["x"]
             marker.pose.position.y = positions[i]["y"]
@@ -153,12 +161,6 @@ class Publisher:
     def publish_results(self, image, header, detections, tracker, cam_calib, 
                         trafo_odom_in_cam, fixed_frame, tracking = True):
         
-        time_delta = None
-        if self.last_publish_time is not None:
-            time_delta = header.stamp - self.last_publish_time
-        
-        self.last_publish_time = header.stamp
-        
         #image detections projected into cartesian space
         projected_det_positions = []
         for detection in detections:
@@ -171,7 +173,7 @@ class Publisher:
         self.publish_image_vis(image, header, detections, self.dets_image_pub)
         
         #publish detection markers
-        self.publish_rviz_marker(header, time_delta, self.rviz_dets_pub, 
+        self.publish_rviz_marker(header.stamp, self.rviz_dets_pub, 
                                  detection_classes, projected_det_positions)
         
         #publish detection messages
@@ -203,7 +205,7 @@ class Publisher:
                                        self.tracks_image_pub)
                 
                 #publish detection markers
-                self.publish_rviz_marker(header.stamp, time_delta, self.rviz_tracks_pub, 
+                self.publish_rviz_marker(header.stamp, self.rviz_tracks_pub, 
                                          track_classes, track_positions,
                                          pos_covariances=track_covs, track_ids=track_ids)
                 
