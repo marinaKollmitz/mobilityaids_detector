@@ -11,13 +11,13 @@ import multiclass_tracking
 from multiclass_tracking.tracker import Tracker
 from multiclass_tracking.viz import Visualizer
 
+from sensor_msgs.msg import CameraInfo, Image
 from dynamic_reconfigure.server import Server
 from mobilityaids_detector.cfg import TrackingParamsConfig
 
-from sensor_msgs.msg import CameraInfo, Image
-
 from publisher import Publisher
 from image_handler import ImageHandler
+from inside_box_filter import filter_inside_boxes
 
 from cv_bridge import CvBridge
 import numpy as np
@@ -25,9 +25,9 @@ import rospy
 import tf
 import os
 import inspect
-import logging
 
 #dirty hack to fix python logging with ROS
+import logging
 detectron.core.track_engine.logger.addHandler(logging.StreamHandler())
 detectron.core.test_engine.logger.addHandler(logging.StreamHandler())
 multiclass_tracking.tracker.logger.addHandler(logging.StreamHandler())
@@ -88,10 +88,10 @@ class Detector:
         #dynamic reconfigure server
         Server(TrackingParamsConfig, self.reconfigure_callback)
         
-        self.viz_helper = Visualizer(len(self.classnames))
         bridge = CvBridge()
         im_width = cfg.TEST.MAX_SIZE
         im_height = cfg.TEST.SCALE
+        self.viz_helper = Visualizer(len(self.classnames))
         self.publisher = Publisher(self.classnames, bridge)
         self.image_handler = ImageHandler(bridge, im_width, im_height)
         
@@ -166,7 +166,7 @@ class Detector:
                 detections.append(detection)
         
         if self.filter_detections:
-            self.filter_inside_boxes(detections, inside_ratio_thresh = self.inside_box_ratio)
+            filter_inside_boxes(detections, inside_ratio_thresh = self.inside_box_ratio)
         
         return detections
     
@@ -177,38 +177,6 @@ class Detector:
             
         if (trafo_odom_in_cam is not None) and (self.cam_calib is not None):
             self.tracker.update(detections, trafo_odom_in_cam, self.cam_calib)
-    
-    def get_inside_ratio(self, bbox_out, bbox_in):
-        
-        overlap_bbox=[0,0,0,0]
-        overlap_bbox[0] = max(bbox_out[0], bbox_in[0]);
-        overlap_bbox[1] = max(bbox_out[1], bbox_in[1]);
-        overlap_bbox[2] = min(bbox_out[2], bbox_in[2]);
-        overlap_bbox[3] = min(bbox_out[3], bbox_in[3]);	
-        #print bi
-        overlap_width = overlap_bbox[2] - overlap_bbox[0] + 1;
-        overlap_height = overlap_bbox[3] - overlap_bbox[1] + 1;
-        inside_ratio = 0.0;
-        if (overlap_width>0 and overlap_height>0):
-            overlap_area = overlap_width*overlap_height
-            bbox_in_area = (bbox_in[2] - bbox_in[0] + 1) * (bbox_in[3] - bbox_in[1] + 1)
-            inside_ratio = float(overlap_area)/float(bbox_in_area);
-        return inside_ratio
-    
-    def filter_inside_boxes(self, detections, inside_ratio_thresh = 0.8):
-        #filter pedestrian bounding box inside mobilityaids bounding box
-        
-        for outside_det in detections:
-            
-            # check for mobility aids bboxes
-            if outside_det['category_id'] > 1:
-                for inside_det in detections:
-                    #check all pedestrian detections against mobility aids detection
-                    if inside_det['category_id'] is 1:
-                        inside_ratio = self.get_inside_ratio(outside_det['bbox'], inside_det['bbox'])
-                        if inside_ratio > inside_ratio_thresh:
-                            rospy.logdebug("filtering pedestrian bbox inside %s bbox" % self.classnames[outside_det['category_id']])
-                            detections.remove(inside_det)
         
     def process_detections(self, image, detections, trafo_odom_in_cam, dt):
         
