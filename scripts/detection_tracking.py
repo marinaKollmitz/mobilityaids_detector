@@ -15,7 +15,6 @@ from dynamic_reconfigure.server import Server
 from mobilityaids_detector.cfg import TrackingParamsConfig
 
 from sensor_msgs.msg import CameraInfo, Image
-from visualization_msgs.msg import Marker, MarkerArray
 
 from publisher import Publisher
 
@@ -65,7 +64,6 @@ class Detector:
         class_thresh, obs_model, meas_cov  = validate_tracking_params(weights_file, 
                                                                       val_dataset)
         self.tracker = Tracker(meas_cov, obs_model, use_hmm=True)
-        self.dt = None #set from image topic timestamps
         self.classnames = ["background", "person", "crutches", "walking_frame", "wheelchair", "push_wheelchair"]
         self.cla_thresholds = class_thresh
         
@@ -168,13 +166,13 @@ class Detector:
         
         return detections
     
-    def update_tracker(self, detections, trafo_odom_in_cam):
+    def update_tracker(self, detections, trafo_odom_in_cam, dt):
         
-        if self.dt is not None:
-            self.tracker.predict(self.dt)
+        if dt is not None:
+            self.tracker.predict(dt)
             
-            if (trafo_odom_in_cam is not None) and (self.cam_calib is not None):
-                self.tracker.update(detections, trafo_odom_in_cam, self.cam_calib)
+        if (trafo_odom_in_cam is not None) and (self.cam_calib is not None):
+            self.tracker.update(detections, trafo_odom_in_cam, self.cam_calib)
     
     def get_inside_ratio(self, bbox_out, bbox_in):
         
@@ -208,10 +206,10 @@ class Detector:
                             rospy.logdebug("filtering pedestrian bbox inside %s bbox" % self.classnames[outside_det['category_id']])
                             detections.remove(inside_det)
         
-    def process_detections(self, image, detections, trafo_odom_in_cam):
+    def process_detections(self, image, detections, trafo_odom_in_cam, dt):
         
         if self.tracking:
-            self.update_tracker(detections, trafo_odom_in_cam)
+            self.update_tracker(detections, trafo_odom_in_cam, dt)
         
         #publish messages
         self.publisher.publish_results(image, self.last_processed_image.header, 
@@ -261,8 +259,10 @@ class Detector:
     def process_last_image(self):
         
         if self.new_image:
+            
+            dt = None
             if self.last_processed_image is not None:
-                self.dt = (self.last_received_image.header.stamp - self.last_processed_image.header.stamp).to_sec()
+                dt = (self.last_received_image.header.stamp - self.last_processed_image.header.stamp).to_sec()
             self.last_processed_image = self.last_received_image
             
             image = self.get_image(self.last_processed_image)
@@ -272,7 +272,7 @@ class Detector:
             
             trafo_odom_in_cam = self.get_trafo_odom_in_cam()
             
-            self.process_detections(image, detections, trafo_odom_in_cam)
+            self.process_detections(image, detections, trafo_odom_in_cam, dt)
             self.new_image = False
 
     def get_cam_calib(self, camera_info):

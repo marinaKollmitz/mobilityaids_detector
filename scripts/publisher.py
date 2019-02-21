@@ -26,7 +26,7 @@ class Publisher:
         self.det_pub = rospy.Publisher("~detections", Detections, queue_size=1)
         self.track_pub = rospy.Publisher("~tracks", Detections, queue_size=1)
         
-        self.dt = 0.1
+        self.last_publish_time = None
         
     def mark_detections(self, image, detections):
         
@@ -113,7 +113,7 @@ class Publisher:
             marker.type = Marker.SPHERE
             marker.action = Marker.MODIFY
             if lifetime is not None:
-                marker.lifetime = rospy.Duration(lifetime)
+                marker.lifetime = lifetime
             else:
                 marker.lifetime = rospy.Duration(0.1)
             #maker position
@@ -153,6 +153,12 @@ class Publisher:
     def publish_results(self, image, header, detections, tracker, cam_calib, 
                         trafo_odom_in_cam, fixed_frame, tracking = True):
         
+        time_delta = None
+        if self.last_publish_time is not None:
+            time_delta = header.stamp - self.last_publish_time
+        
+        self.last_publish_time = header.stamp
+        
         #image detections projected into cartesian space
         projected_det_positions = []
         for detection in detections:
@@ -165,7 +171,7 @@ class Publisher:
         self.publish_image_vis(image, header, detections, self.dets_image_pub)
         
         #publish detection markers
-        self.publish_rviz_marker(header, self.dt, self.rviz_dets_pub, 
+        self.publish_rviz_marker(header, time_delta, self.rviz_dets_pub, 
                                  detection_classes, projected_det_positions)
         
         #publish detection messages
@@ -197,7 +203,7 @@ class Publisher:
                                        self.tracks_image_pub)
                 
                 #publish detection markers
-                self.publish_rviz_marker(header.stamp, self.dt, self.rviz_tracks_pub, 
+                self.publish_rviz_marker(header.stamp, time_delta, self.rviz_tracks_pub, 
                                          track_classes, track_positions,
                                          pos_covariances=track_covs, track_ids=track_ids)
                 
