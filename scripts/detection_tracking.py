@@ -36,10 +36,43 @@ class Detector:
     
     def __init__(self):
         
-        detectron_root = os.path.join(os.path.dirname(inspect.getfile(detectron)), os.pardir)
-        
-        #model config file - mandatory
+        self.classnames = ["background", "person", "crutches", "walking_frame", "wheelchair", "push_wheelchair"]
+
+        #read rosparams
         config_file = rospy.get_param('~model_config', "")
+        self.fixed_frame = rospy.get_param('~fixed_frame', 'odom')
+        self.tracking = rospy.get_param('~tracking', True)
+        self.filter_detections = rospy.get_param('~filter_inside_boxes', True)
+        self.inside_box_ratio = rospy.get_param('~inside_box_ratio', 0.8)
+        camera_topic = rospy.get_param('~camera_topic', '/kinect2/qhd/image_color_rect')
+        camera_info_topic = rospy.get_param('~camera_info_topic', '/kinect2/qhd/camera_info')
+        
+        #initialize subscribers
+        rospy.Subscriber(camera_topic, Image, self.image_callback, queue_size=1) 
+        rospy.Subscriber(camera_info_topic, CameraInfo, self.cam_info_callback, queue_size=1)
+        
+        #detection model and tracker
+        self.setup_model_and_tracker(config_file)
+        
+        #image queues
+        self.last_received_image = None #set from image topic
+        self.last_processed_image = None #set from image topic
+        self.new_image = False
+        
+        self.cam_calib = None #set from camera info
+        self.camera_frame = None #set from camera info
+        
+        #helpers
+        Server(TrackingParamsConfig, self.reconfigure_callback)
+        bridge = CvBridge()
+        self.viz_helper = Visualizer(len(self.classnames))
+        self.publisher = Publisher(self.classnames, bridge)
+        self.image_handler = ImageHandler(bridge, cfg.TEST.MAX_SIZE, cfg.TEST.SCALE)
+        self.tfl = tf.TransformListener()
+    
+    def setup_model_and_tracker(self, config_file):
+        
+        detectron_root = os.path.join(os.path.dirname(inspect.getfile(detectron)), os.pardir)
         
         if not os.path.exists(config_file):
             rospy.logerr("config file '{}' does not exist. ".format(config_file) + 
@@ -47,7 +80,7 @@ class Detector:
                          "model_config ros param. See " +
                          "https://github.com/marinaKollmitz/mobilityaids_detector " +
                          "for setup instructions")
-            exit(0)
+            exit(0) #TODO throw exception
         
         merge_cfg_from_file(config_file)
         
@@ -64,38 +97,7 @@ class Detector:
         class_thresh, obs_model, meas_cov  = validate_tracking_params(weights_file, 
                                                                       val_dataset)
         self.tracker = Tracker(meas_cov, obs_model, use_hmm=True)
-        self.classnames = ["background", "person", "crutches", "walking_frame", "wheelchair", "push_wheelchair"]
         self.cla_thresholds = class_thresh
-        
-        self.last_received_image = None #set from image topic
-        self.last_processed_image = None #set from image topic
-        self.new_image = False
-        
-        self.cam_calib = None #set from camera info
-        self.camera_frame = None #set from camera info
-        
-        #read rosparams
-        self.fixed_frame = rospy.get_param('~fixed_frame', 'odom')
-        self.tracking = rospy.get_param('~tracking', True)
-        self.filter_detections = rospy.get_param('~filter_inside_boxes', True)
-        self.inside_box_ratio = rospy.get_param('~inside_box_ratio', 0.8)
-        camera_topic = rospy.get_param('~camera_topic', '/kinect2/qhd/image_color_rect')
-        camera_info_topic = rospy.get_param('~camera_info_topic', '/kinect2/qhd/camera_info')
-        
-        rospy.Subscriber(camera_topic, Image, self.image_callback, queue_size=1) 
-        rospy.Subscriber(camera_info_topic, CameraInfo, self.cam_info_callback, queue_size=1)
-        
-        #dynamic reconfigure server
-        Server(TrackingParamsConfig, self.reconfigure_callback)
-        
-        bridge = CvBridge()
-        im_width = cfg.TEST.MAX_SIZE
-        im_height = cfg.TEST.SCALE
-        self.viz_helper = Visualizer(len(self.classnames))
-        self.publisher = Publisher(self.classnames, bridge)
-        self.image_handler = ImageHandler(bridge, im_width, im_height)
-        
-        self.tfl = tf.TransformListener()
     
     def reconfigure_callback(self, config, level):
         
